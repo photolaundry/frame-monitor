@@ -1,0 +1,424 @@
+<html>
+    <head>
+        <style>
+            .body {
+                padding: 20px;
+                font-family: "Helvetica";
+                max-width: 1200px;
+                margin-left: auto;
+                margin-right: auto;
+            }
+
+            .floating-box {
+                background-color: rgba(0, 0, 0, 0.5);
+                color: white;
+                font-size: 14px;
+                padding: 15px;
+                margin: 0px 0px;
+                touch-action: none;
+                user-select: none;
+                top: 0;
+                box-sizing: border-box;
+                position: absolute;
+                border: 1px solid black;
+            }
+
+            .content {
+                position: relative;
+            }
+
+            .video {
+                z-index: 0;
+                display: none;
+            }
+
+            .add-histogram-button {
+                border-radius: 9999px;
+                background: green;
+                color: white;
+                border: none;
+                padding: 10px 40px;
+                display: none;
+            }
+
+            .histogram-container {
+                display: flex;
+                height: 120px;
+                flex-flow: row nowrap;
+            }
+
+            .histogram {
+                display: block;
+                background: #EEEEEE;
+            }
+
+            .histogram:not(:last-child) {
+                margin-right: 20px;
+            }
+
+            .instructions {
+                display: none;
+                margin-bottom: 20px;
+            }
+        </style>
+        <title>Photo Laundry Frame Monitor</title>
+    </head>
+    <body class="body">
+        <div id="histogram-container" class="histogram-container"></div>
+        <div id="instructions" class="instructions">Click to add box, double-click to remove</div>
+        <section id="content" class="content">
+            <video id="video" class="video" width="100%" autoplay></video>
+        </section>
+
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/4.11.0/d3.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/interactjs/dist/interact.min.js"></script>
+
+        <script>
+            class ImageAreaSelection {
+                static initialWidth = 240;
+                static initialHeight = 160;
+
+                constructor(boxNumber, absoluteX, absoluteY) {
+                    const relativeX = (absoluteX - ImageAreaSelection.initialWidth / 2) / View.video.clientWidth;
+                    const relativeY = (absoluteY - ImageAreaSelection.initialHeight / 2) / View.video.clientHeight;
+                    this.relativePosition = new ImageAreaRelativePosition(
+                        Math.max(0.0, Math.min(1.0, relativeX)),
+                        Math.max(0.0, Math.min(1.0, relativeY)),
+                        ImageAreaSelection.initialWidth / View.video.clientWidth,
+                        ImageAreaSelection.initialHeight / View.video.clientHeight,
+                    );
+                    this.draggableBoxDiv = ImageAreaSelection.createDraggableBoxDiv(boxNumber);
+                    this.canvas = document.createElement("canvas");
+                    this.histogramSvg = ImageAreaSelection.createHistogramSvg(boxNumber);
+                    this.context = this.canvas.getContext('2d', { willReadFrequently: true });
+                    this.boxNumber = boxNumber;
+                    this.applyRelativePositionToBox(this.relativePosition, this.draggableBoxDiv);
+                }
+
+                updateRelativePosition(x, y, width, height) {
+                    this.relativePosition.x = x;
+                    this.relativePosition.y = y;
+                    this.relativePosition.width = width;
+                    this.relativePosition.height = height;
+                    this.applyRelativePositionToBox(this.relativePosition, this.draggableBoxDiv);
+                }
+
+                applyRelativePositionToBox(relativePosition, draggableBoxDiv) {
+                    const videoWidth = View.video.clientWidth;
+                    const videoHeight = View.video.clientHeight;
+                    const newBoxX = relativePosition.x * View.video.clientWidth;
+                    const newBoxY = relativePosition.y * View.video.clientHeight;
+
+                    draggableBoxDiv.style.transform = "translate(" + newBoxX + "px, " + newBoxY + "px)";
+                    draggableBoxDiv.style.webkitTransform = draggableBoxDiv.style.transform;
+
+                    draggableBoxDiv.style.width = relativePosition.width * videoWidth;
+                    draggableBoxDiv.style.height = relativePosition.height * videoHeight;
+                    draggableBoxDiv.setAttribute("data-x", newBoxX);
+                    draggableBoxDiv.setAttribute("data-y", newBoxY);
+                }
+
+                dispose() {
+                    View.content.removeChild(this.draggableBoxDiv);
+                    View.histogramContainer.removeChild(this.histogramSvg);
+                }
+
+                static getBoxId(boxNumber) {
+                    return "box-" + boxNumber
+                }
+
+                static getHistogramId(boxNumber) {
+                    return "histogram-" + boxNumber;
+                }
+
+                static createDraggableBoxDiv(boxNumber) {
+                    const draggableBoxDiv = document.createElement("div");
+                    draggableBoxDiv.className = "floating-box";
+                    draggableBoxDiv.id = ImageAreaSelection.getBoxId(boxNumber);
+                    draggableBoxDiv.style.width = ImageAreaSelection.initialWidth;
+                    draggableBoxDiv.style.height = ImageAreaSelection.initialHeight;
+                    draggableBoxDiv.innerHTML = boxNumber;
+                    View.content.appendChild(draggableBoxDiv);
+                    return draggableBoxDiv;
+                }
+
+                static createHistogramSvg(boxNumber) {
+                    const histogramSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg")
+                    histogramSvg.id = ImageAreaSelection.getHistogramId(boxNumber);
+                    histogramSvg.setAttribute("width", 1);
+                    histogramSvg.setAttribute("height", 1);
+                    histogramSvg.setAttribute("class", "histogram")
+                    View.histogramContainer.append(histogramSvg);
+                    return histogramSvg;
+                }
+            }
+
+            class ImageAreaRelativePosition {
+                constructor(x, y, width, height) {
+                    this.x = x;
+                    this.y = y;
+                    this.width = width;
+                    this.height = height;
+                }
+            }
+
+            class ImageAreaRepository {
+                constructor() {
+                    this.boxIdToImageAreaSelection = {};
+                    this.histogramCount = 0;
+                }
+
+                createBox(absoluteX, absoluteY) {
+                    this.histogramCount += 1;
+
+                    const imageAreaSelection = new ImageAreaSelection(this.histogramCount, absoluteX, absoluteY);
+
+                    this.attachBoxResizeListener(imageAreaSelection.draggableBoxDiv);
+                    this.attachBoxInteractionListeners(imageAreaSelection.draggableBoxDiv);
+
+                    this.boxIdToImageAreaSelection[imageAreaSelection.draggableBoxDiv.id] = imageAreaSelection;
+                }
+
+                attachBoxResizeListener(draggableBoxDiv) {
+                    new ResizeObserver(() => {
+                        if (!this.boxIdToImageAreaSelection[draggableBoxDiv.id]) {
+                            return;
+                        }
+                        const imageAreaSelection = this.boxIdToImageAreaSelection[draggableBoxDiv.id];
+                        imageAreaSelection.updateRelativePosition(
+                            imageAreaSelection.relativePosition.x,
+                            imageAreaSelection.relativePosition.y,
+                            imageAreaSelection.relativePosition.width,
+                            imageAreaSelection.relativePosition.height,
+                        );
+                    }).observe(View.video);
+                }
+
+                attachBoxInteractionListeners(draggableBoxDiv) {
+                    interact("#" + draggableBoxDiv.id)
+                        .draggable({
+                            inertia: false,
+                            onmove: (event) => {
+                                const imageAreaSelection = this.boxIdToImageAreaSelection[draggableBoxDiv.id];
+                                const absoluteX = (parseFloat(draggableBoxDiv.getAttribute("data-x")) || 0) + event.dx;
+                                const absoluteY = (parseFloat(draggableBoxDiv.getAttribute("data-y")) || 0) + event.dy;
+
+                                imageAreaSelection.updateRelativePosition(
+                                    absoluteX / View.video.clientWidth,
+                                    absoluteY / View.video.clientHeight,
+                                    imageAreaSelection.relativePosition.width,
+                                    imageAreaSelection.relativePosition.height,
+                                );
+                            },
+                            modifiers: [
+                                interact.modifiers.restrict({
+                                    restriction: "parent",
+                                    elementRect: { top: 0, left: 0, bottom: 1, right: 1 }
+                                })
+                            ]
+                        })
+                        .resizable({
+                            edges: { left: true, right: true, bottom: true, top: true },
+                            modifiers: [
+                                interact.modifiers.restrictEdges({
+                                    outer: "parent",
+                                    endOnly: false,
+                                }),
+                                interact.modifiers.restrictSize({
+                                    min: { width: 50, height: 50 },
+                                }),
+                                interact.modifiers.restrict({
+                                    restriction: "parent",
+                                })
+                            ],
+                            inertia: false
+                        })
+                        .on("resizemove", (event) => {
+                            const imageAreaSelection = this.boxIdToImageAreaSelection[draggableBoxDiv.id];
+                            const absoluteX = (parseFloat(draggableBoxDiv.getAttribute("data-x")) || 0)
+                                + event.deltaRect.left;
+                            const absoluteY = (parseFloat(draggableBoxDiv.getAttribute("data-y")) || 0)
+                                + event.deltaRect.top;
+
+                            const absoluteWidth = event.rect.width;
+                            const absoluteHeight = event.rect.height;
+
+                            imageAreaSelection.updateRelativePosition(
+                                absoluteX / View.video.clientWidth,
+                                absoluteY / View.video.clientHeight,
+                                absoluteWidth / View.video.clientWidth,
+                                absoluteHeight / View.video.clientHeight,
+                            );
+                        })
+                        .on("doubletap", (event) => {
+                            this.removeBox(draggableBoxDiv.id);
+                        });
+                }
+
+                removeBox(idName) {
+                    if (this.boxIdToImageAreaSelection[idName]) {
+                        this.boxIdToImageAreaSelection[idName].dispose();
+                        delete this.boxIdToImageAreaSelection[idName];
+                    }
+                }
+            }
+
+            class HistogramController {
+                static histogramWidth = 200;
+                static histogramHeight = 100;
+                static histogramRedrawInterval = 30;
+
+                constructor(imageAreaRepository) {
+                    this.imageAreaRepository = imageAreaRepository;
+                    window.setInterval(() => { this.redrawHistograms() }, HistogramController.histogramRedrawInterval);
+                }
+
+                redrawHistograms() {
+                    Object.keys(this.imageAreaRepository.boxIdToImageAreaSelection).forEach(boxId => {
+                        const videoWidth = View.video.videoWidth;
+                        const videoHeight = View.video.videoHeight;
+
+                        const imageAreaSelection = this.imageAreaRepository.boxIdToImageAreaSelection[boxId];
+                        const relativePosition = imageAreaSelection.relativePosition;
+
+                        const canvas = imageAreaSelection.canvas;
+
+                        canvas.height = relativePosition.height * videoHeight;
+                        canvas.width = relativePosition.width * videoWidth;
+
+                        const context = imageAreaSelection.context;
+
+                        imageAreaSelection.context.drawImage(
+                            video,
+                            relativePosition.x * videoWidth,
+                            relativePosition.y * videoHeight,
+                            relativePosition.width * videoWidth,
+                            relativePosition.height * videoHeight,
+                            0,
+                            0,
+                            canvas.width,
+                            canvas.height,
+                        );
+
+                        const histogramData = HistogramController.calculateHistogramData(context, canvas);
+                        HistogramController.graphHistogram(
+                            imageAreaSelection.boxNumber,
+                            histogramData,
+                            imageAreaSelection.histogramSvg,
+                        );
+                    });
+                }
+
+                static calculateHistogramData(context, canvas) {
+                    const rD = {}, gD = {}, bD = {};
+                    let pixelSum={};
+
+                    const iD = context.getImageData(0, 0, canvas.width, canvas.height).data;
+                    for (let i = 0; i < 256; i++) {
+                        rD[i]=0;
+                        gD[i]=0;
+                        bD[i]=0;
+                    }
+                    for (let i = 0; i <= 765; i++) {
+                        pixelSum[i]=0;
+                    }
+                    for (let i = 0; i < iD.length; i += 4) {
+                        pixelSum[iD[i] + iD[i+1] + iD[i+2]]++;
+                        rD[iD[i]]++;
+                        gD[iD[i+1]]++;
+                        bD[iD[i+2]]++;
+                    }
+                    return {pixelSum, rD, gD, bD};
+                }
+
+                static graphHistogram(label, data, svg) {
+                    svg.style.width = HistogramController.histogramWidth;
+                    svg.style.height = HistogramController.histogramHeight;
+
+                    d3.select(svg).selectAll("g").remove();
+
+                    HistogramController.graphComponent(data.gD, "green", svg);
+                    HistogramController.graphComponent(data.bD, "blue", svg);
+                    HistogramController.graphComponent(data.rD, "red", svg);
+
+                    d3.select(svg)
+                        .append("g")
+                        .append("foreignObject")
+                        .attr('x', 0)
+                        .attr('y', 0)
+                        .attr('width', 150)
+                        .attr('height', 100)
+                        .append("xhtml:body")
+                        .html('<div style="width: 150px;">' + label + '</div>');
+                }
+
+                static graphComponent(data, color, svg) {
+                    const d3Data = Object.keys(data).map((key) => { return { freq: data[key], idx: +key } });
+                    const x = d3.scaleLinear()
+                        .range([0, HistogramController.histogramWidth - 2])
+                        .domain([0, d3.max(d3Data, (d) => { return d.idx; })]);
+                    const y = d3.scaleLinear()
+                        .range([HistogramController.histogramHeight, 0])
+                        .domain([0, d3.max(d3Data, (d) => { return d.freq; })]);
+                    const g = d3.select(svg).append("g")
+                    g.selectAll(".bar-" + color)
+                        .data(d3Data)
+                        .enter().append("rect")
+                        .attr("class", "bar-" + color)
+                        .attr("fill", color)
+                        .attr("x", (d) => { return x(d.idx); })
+                        .attr("y", (d) => { return y(d.freq); })
+                        .attr("width", 2)
+                        .attr("opacity", 0.1)
+                        .attr("height", (d) => { return HistogramController.histogramHeight - y(d.freq); })
+                }
+            }
+
+            class View {
+                static instructions = document.getElementById("instructions");
+                static video = document.getElementById("video");
+                static content = document.getElementById("content");
+                static histogramContainer = document.getElementById("histogram-container");
+            }
+
+            class Application {
+                constructor() {
+                    Application.startVideoCapture();
+
+                    const imageAreaRepository = new ImageAreaRepository();
+                    const histogramController = new HistogramController(imageAreaRepository);
+
+                    View.video.onclick = (event) => {
+                        const rect = event.target.getBoundingClientRect();
+                        const absoluteX = event.clientX - rect.left;
+                        const absoluteY = event.clientY - rect.top; 
+                        imageAreaRepository.createBox(absoluteX, absoluteY);
+                    };
+                }
+
+                static startVideoCapture() {
+                    navigator.mediaDevices
+                        .getDisplayMedia(
+                            {
+                              video: {
+                                displaySurface: "window",
+                              },
+                              audio: false,
+                            }
+                        )
+                        .catch((err) => {
+                          console.error(err);
+                          return null;
+                        })
+                        .then(stream => {
+                            View.video.style.display = "block";
+                            View.video.srcObject = stream
+                            View.instructions.style.display = "block";
+                        });
+                }
+            }
+
+            new Application();
+        </script>
+    </body>
+</html>
