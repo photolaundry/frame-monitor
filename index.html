@@ -43,8 +43,8 @@
 
             .histogram-container {
                 display: flex;
-                height: 120px;
-                flex-flow: row nowrap;
+                margin-bottom: 20px;
+                flex-flow: row wrap;
             }
 
             .histogram {
@@ -65,6 +65,7 @@
     </head>
     <body class="body">
         <div id="histogram-container" class="histogram-container"></div>
+        <button id="start-button">Start capture</button>
         <div id="instructions" class="instructions">Click to add box, double-click to remove</div>
         <section id="content" class="content">
             <video id="video" class="video" width="100%" autoplay></video>
@@ -383,7 +384,9 @@
 
             class Application {
                 constructor() {
-                    Application.startVideoCapture();
+                    document.getElementById("start-button").onclick = () => {
+                        Application.startVideoCapture();
+                    }
 
                     const imageAreaRepository = new ImageAreaRepository();
                     const histogramController = new HistogramController(imageAreaRepository);
@@ -422,3 +425,4 @@
         </script>
     </body>
 </html>
+
